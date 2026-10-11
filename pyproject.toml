@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contentpilot-agent"
+version = "0.7.0"
+description = "A multi-platform content operations Agent for controlled team deployment."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.0,<2",
+    "openai>=1.40.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "mcp>=1.0,<2",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
+    "jinja2>=3.1,<4",
+    "httpx>=0.28,<1",
+    "cryptography>=44",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff>=0.11", "playwright>=1.50", "pyyaml>=6"]
+
+[project.scripts]
+contentpilot = "contentpilot_agent.cli:main"
+contentpilot-eval = "contentpilot_agent.evaluation:main"
+contentpilot-manage = "contentpilot_agent.manage:main"
+contentpilot-worker = "contentpilot_agent.worker:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["contentpilot_agent*"]
+
+[tool.setuptools.package-data]
+contentpilot_agent = ["templates/*.html", "static/*.css", "static/*.js"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+extend-ignore = ["B008"]

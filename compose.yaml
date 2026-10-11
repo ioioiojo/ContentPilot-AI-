@@ -1,0 +1,124 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: &bounded-logs
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-contentpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-contentpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.server.example to .env and set a random password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    mem_limit: 512m
+    security_opt: [no-new-privileges:true]
+    networks: [internal]
+
+  web:
+    build: .
+    image: contentpilot:0.7.0
+    restart: unless-stopped
+    logging: *bounded-logs
+    init: true
+    command: ["sh", "-c", "python -m contentpilot_agent.manage init-db && exec uvicorn contentpilot_agent.api:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log"]
+    environment: &app-env
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentpilot}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-contentpilot}
+      COOKIE_SECURE: "true"
+      CONTENTPILOT_PROVIDER: ${CONTENTPILOT_PROVIDER:-compatible}
+      CONTENTPILOT_TOOLS: ${CONTENTPILOT_TOOLS:-mcp}
+      CONTENTPILOT_IMAGE_BASE_URL: ${CONTENTPILOT_IMAGE_BASE_URL:-}
+      CONTENTPILOT_IMAGE_API_KEY: ${CONTENTPILOT_IMAGE_API_KEY:-}
+      CONTENTPILOT_IMAGE_MODEL: ${CONTENTPILOT_IMAGE_MODEL:-}
+      CONTENTPILOT_VIDEO_URL: ${CONTENTPILOT_VIDEO_URL:-}
+      CONTENTPILOT_VIDEO_TOKEN: ${CONTENTPILOT_VIDEO_TOKEN:-}
+      CONTENTPILOT_PUBLISH_XIAOHONGSHU_URL: ${CONTENTPILOT_PUBLISH_XIAOHONGSHU_URL:-}
+      CONTENTPILOT_PUBLISH_XIAOHONGSHU_TOKEN: ${CONTENTPILOT_PUBLISH_XIAOHONGSHU_TOKEN:-}
+      CONTENTPILOT_PUBLISH_DOUYIN_URL: ${CONTENTPILOT_PUBLISH_DOUYIN_URL:-}
+      CONTENTPILOT_PUBLISH_DOUYIN_TOKEN: ${CONTENTPILOT_PUBLISH_DOUYIN_TOKEN:-}
+      CONTENTPILOT_PUBLISH_WECHAT_URL: ${CONTENTPILOT_PUBLISH_WECHAT_URL:-}
+      CONTENTPILOT_PUBLISH_WECHAT_TOKEN: ${CONTENTPILOT_PUBLISH_WECHAT_TOKEN:-}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-180}
+      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-1}
+      MAX_ACTIVE_JOBS: ${MAX_ACTIVE_JOBS:-10}
+      DAILY_JOBS: ${DAILY_JOBS:-50}
+      MAX_ACTIVE_MEDIA: ${MAX_ACTIVE_MEDIA:-5}
+      DAILY_MEDIA: ${DAILY_MEDIA:-20}
+      SUBMISSIONS_ENABLED: ${SUBMISSIONS_ENABLED:-true}
+      CONTENTPILOT_SEARCH_XIAOHONGSHU_URL: ${CONTENTPILOT_SEARCH_XIAOHONGSHU_URL:-}
+      CONTENTPILOT_SEARCH_XIAOHONGSHU_TOKEN: ${CONTENTPILOT_SEARCH_XIAOHONGSHU_TOKEN:-}
+      CONTENTPILOT_SEARCH_XIAOHONGSHU_PROVIDER: ${CONTENTPILOT_SEARCH_XIAOHONGSHU_PROVIDER:-auto}
+      TIKHUB_API_KEY: ${TIKHUB_API_KEY:-}
+      CONTENTPILOT_CONFIG_KEY: ${CONTENTPILOT_CONFIG_KEY:-}
+      CONTENTPILOT_CONFIG_KEY_FILE: /app/secure/service-config.key
+      CONTENTPILOT_HOTSPOTS_URL: ${CONTENTPILOT_HOTSPOTS_URL:-}
+      CONTENTPILOT_HOTSPOTS_TOKEN: ${CONTENTPILOT_HOTSPOTS_TOKEN:-}
+      CONTENTPILOT_METRICS_XIAOHONGSHU_URL: ${CONTENTPILOT_METRICS_XIAOHONGSHU_URL:-}
+      CONTENTPILOT_METRICS_XIAOHONGSHU_TOKEN: ${CONTENTPILOT_METRICS_XIAOHONGSHU_TOKEN:-}
+      CONTENTPILOT_METRICS_DOUYIN_URL: ${CONTENTPILOT_METRICS_DOUYIN_URL:-}
+      CONTENTPILOT_METRICS_DOUYIN_TOKEN: ${CONTENTPILOT_METRICS_DOUYIN_TOKEN:-}
+      CONTENTPILOT_METRICS_WECHAT_URL: ${CONTENTPILOT_METRICS_WECHAT_URL:-}
+      CONTENTPILOT_METRICS_WECHAT_TOKEN: ${CONTENTPILOT_METRICS_WECHAT_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen-plus}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,contentpilot.example.com}
+    ports:
+      - "127.0.0.1:18080:8000"
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 20s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+    read_only: true
+    volumes:
+      - service_keys:/app/secure
+    tmpfs: ["/tmp:size=32m,noexec,nosuid"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 768m
+    networks: [internal]
+
+  worker:
+    image: contentpilot:0.7.0
+    restart: unless-stopped
+    logging: *bounded-logs
+    stop_grace_period: 20s
+    init: true
+    command: ["python", "-m", "contentpilot_agent.worker"]
+    environment: *app-env
+    depends_on:
+      web: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-m", "contentpilot_agent.worker", "--healthcheck"]
+      interval: 60s
+      timeout: 3s
+      retries: 3
+    read_only: true
+    volumes:
+      - service_keys:/app/secure
+    tmpfs: ["/tmp:size=32m,noexec,nosuid"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 1g
+    networks: [internal]
+
+volumes:
+  postgres_data:
+  service_keys:
+
+networks:
+  internal:
+    driver: bridge

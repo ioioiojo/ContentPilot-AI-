@@ -1,0 +1,62 @@
+name: Release checks
+on: [push, pull_request]
+jobs:
+  sqlite-and-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -c requirements.lock -e '.[dev]'
+      - run: python -m playwright install --with-deps --no-shell chromium
+      - run: python -m ruff check contentpilot_agent tests scripts
+      - run: python -m pytest -q
+      - run: python scripts/package_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contentpilot-source
+          path: dist/
+  postgres-and-container:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: contentpilot
+          POSTGRES_PASSWORD: ci-disposable-password-only
+          POSTGRES_DB: contentpilot
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U contentpilot'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://contentpilot:ci-disposable-password-only@127.0.0.1:5432/contentpilot
+      APP_ENV: staging
+      CONTENTPILOT_PROVIDER: mock
+      CONTENTPILOT_TOOLS: mcp
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      SMOKE_PASSWORD: ci-smoke-disposable-password-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -c requirements.lock -e '.[dev]'
+      - run: python -m pytest -q tests/test_postgres.py
+      - run: for script in scripts/*.sh; do sh -n "$script"; done
+      - run: sh scripts/prepare_server_env.sh
+      - run: sh scripts/deploy.sh first
+      - run: docker compose exec -T -e SMOKE_PASSWORD web python - --seed < scripts/container_smoke.py
+      - run: python scripts/container_smoke.py
+      - name: Backup and restore drill (disposable CI database only)
+        run: |
+          sh scripts/backup.sh
+          backup=$(find backups -maxdepth 1 -name '*.dump' -type f -print | sort | tail -n 1)
+          sh scripts/restore.sh --confirm-replace-database "$backup"
+          python scripts/container_smoke.py
+          sh scripts/monitor.sh
+      - if: failure()
+        run: docker compose ps; docker compose logs --tail=100 web worker
+      - if: always()
+        run: docker compose down --volumes
